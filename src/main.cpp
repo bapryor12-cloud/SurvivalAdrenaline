@@ -3,7 +3,8 @@
 // While the player is in a dungeon or in combat, hunger and fatigue
 // (exhaustion) build up more slowly. The part they didn't gain is kept as a
 // debt, and when the adrenaline ends (out of combat and out of any dungeon)
-// the whole debt lands at once: the crash.
+// the whole debt lands at once: the crash. Debt built up inside a dungeon
+// lands harder (1.25x by default); debt from combat elsewhere lands as is.
 //
 // With Survival Mode Improved - SKSE it scales SMI's own rate multipliers
 // (SMI_HungerRateMult / SMI_ExhaustionRateMult in Update.esm). SMI resets the
@@ -27,9 +28,10 @@ namespace
 	constexpr float            kMinMult = 0.05f;  // the debt can't be measured at 0
 
 	constexpr std::uint32_t kCosaveID = 'SADR';
-	constexpr std::uint32_t kCosaveVersion = 2;
+	constexpr std::uint32_t kCosaveVersion = 3;
 	constexpr std::uint32_t kRecordHunger = 'HUNG';
 	constexpr std::uint32_t kRecordFatigue = 'FATG';
+	constexpr std::uint32_t kRecordState = 'STAT';
 
 	// Location keywords (Skyrim.esm) that mark a dungeon.
 	constexpr RE::FormID kDungeonKeywords[] = {
@@ -54,6 +56,7 @@ namespace
 		float hungerInCombat = 0.15f;
 		float fatigueInCombat = 0.15f;
 		float checkInterval = 1.0f;
+		float dungeonCrashMult = 1.25f;
 		bool  crashMessage = true;
 	};
 	Settings g_settings;
@@ -71,17 +74,18 @@ namespace
 		float normal = 0.0f;    // the rate value to restore
 		float written = 0.0f;   // the rate value this mod last wrote
 		float mult = 1.0f;      // the scale currently applied
-		float debt = 0.0f;      // need held back, paid at the crash
+		float dungeonDebt = 0.0f;  // need held back inside a dungeon, paid harder at the crash
+		float combatDebt = 0.0f;   // need held back in combat outside dungeons
 
 		// Not saved; re-read after a load.
 		std::optional<float> lastValue;
 
 		// Adds to the debt what this need didn't gain since the last check.
-		void Measure()
+		void Measure(bool a_wasInDungeon)
 		{
 			const float current = value->value;
 			if (active && lastValue && current > *lastValue) {
-				debt += (current - *lastValue) * (1.0f - mult) / mult;
+				(a_wasInDungeon ? dungeonDebt : combatDebt) += (current - *lastValue) * (1.0f - mult) / mult;
 			}
 			lastValue = current;
 		}
@@ -110,15 +114,17 @@ namespace
 		}
 
 		// Pays the whole debt at once. Returns whether there was any.
-		bool Crash()
+		bool Crash(float a_dungeonCrashMult)
 		{
+			const float debt = dungeonDebt * a_dungeonCrashMult + combatDebt;
 			if (debt <= 0.0f) {
 				return false;
 			}
 			const float before = value->value;
 			value->value = max ? std::min(before + debt, max->value) : before + debt;
-			spdlog::info("{} crash: {} -> {} (debt {})", name, before, value->value, debt);
-			debt = 0.0f;
+			spdlog::info("{} crash: {} -> {} (dungeon debt {} x{}, combat debt {})", name, before, value->value, dungeonDebt, a_dungeonCrashMult, combatDebt);
+			dungeonDebt = 0.0f;
+			combatDebt = 0.0f;
 			lastValue = value->value;
 			return true;
 		}
@@ -129,6 +135,7 @@ namespace
 	Need g_fatigue{ "Fatigue" };
 
 	std::vector<RE::BGSKeyword*> g_dungeonKeywords;
+	bool                         g_wasInDungeon = false;  // as of the last check; saved
 
 	void SetupLog()
 	{
@@ -168,6 +175,7 @@ namespace
 			{ "fHungerMultInCombat", &g_settings.hungerInCombat },
 			{ "fFatigueMultInCombat", &g_settings.fatigueInCombat },
 			{ "fCheckIntervalSeconds", &g_settings.checkInterval },
+			{ "fDungeonCrashMult", &g_settings.dungeonCrashMult },
 			{ "bCrashMessage", &crashMessage },
 		};
 		std::string line;
@@ -193,6 +201,7 @@ namespace
 			*mult = std::clamp(*mult, kMinMult, 1.0f);
 		}
 		g_settings.checkInterval = std::clamp(g_settings.checkInterval, 0.25f, 10.0f);
+		g_settings.dungeonCrashMult = std::max(g_settings.dungeonCrashMult, 0.0f);
 		g_settings.crashMessage = crashMessage != 0.0f;
 		spdlog::info("Dungeon: hunger x{}, fatigue x{}. Combat: hunger x{}, fatigue x{}.",
 			g_settings.hungerInDungeon, g_settings.fatigueInDungeon, g_settings.hungerInCombat, g_settings.fatigueInCombat);
@@ -244,13 +253,14 @@ namespace
 		for (auto [need, dungeonMult, combatMult] : {
 				 std::tuple{ &g_hunger, g_settings.hungerInDungeon, g_settings.hungerInCombat },
 				 std::tuple{ &g_fatigue, g_settings.fatigueInDungeon, g_settings.fatigueInCombat } }) {
-			need->Measure();
+			need->Measure(g_wasInDungeon);
 			const auto mult = CurrentMult(dungeon, combat, dungeonMult, combatMult);
 			need->Scale(mult);
 			if (!mult) {
-				crashed |= need->Crash();
+				crashed |= need->Crash(g_settings.dungeonCrashMult);
 			}
 		}
+		g_wasInDungeon = dungeon;
 		if (crashed && g_settings.crashMessage) {
 			RE::SendHUDMessage::ShowHUDMessage("The adrenaline fades. Your hunger and weariness catch up with you.");
 		}
@@ -313,7 +323,8 @@ namespace
 			a_intfc->WriteRecordData(a_need.normal);
 			a_intfc->WriteRecordData(a_need.written);
 			a_intfc->WriteRecordData(a_need.mult);
-			a_intfc->WriteRecordData(a_need.debt);
+			a_intfc->WriteRecordData(a_need.dungeonDebt);
+			a_intfc->WriteRecordData(a_need.combatDebt);
 		}
 	}
 
@@ -321,12 +332,19 @@ namespace
 	{
 		SaveNeed(a_intfc, kRecordHunger, g_hunger);
 		SaveNeed(a_intfc, kRecordFatigue, g_fatigue);
+		if (a_intfc->OpenRecord(kRecordState, kCosaveVersion)) {
+			a_intfc->WriteRecordData(g_wasInDungeon);
+		}
 	}
 
 	void OnLoad(SKSE::SerializationInterface* a_intfc)
 	{
 		std::uint32_t type, version, length;
 		while (a_intfc->GetNextRecordInfo(type, version, length)) {
+			if (type == kRecordState && version == kCosaveVersion) {
+				a_intfc->ReadRecordData(g_wasInDungeon);
+				continue;
+			}
 			Need* need = type == kRecordHunger ? &g_hunger : type == kRecordFatigue ? &g_fatigue : nullptr;
 			if (!need || version != kCosaveVersion) {
 				continue;
@@ -335,17 +353,20 @@ namespace
 			a_intfc->ReadRecordData(need->normal);
 			a_intfc->ReadRecordData(need->written);
 			a_intfc->ReadRecordData(need->mult);
-			a_intfc->ReadRecordData(need->debt);
+			a_intfc->ReadRecordData(need->dungeonDebt);
+			a_intfc->ReadRecordData(need->combatDebt);
 			need->mult = std::clamp(need->mult, kMinMult, 1.0f);
 		}
 	}
 
 	void OnRevert(SKSE::SerializationInterface*)
 	{
+		g_wasInDungeon = false;
 		for (Need* need : { &g_hunger, &g_fatigue }) {
 			need->active = false;
 			need->mult = 1.0f;
-			need->debt = 0.0f;
+			need->dungeonDebt = 0.0f;
+			need->combatDebt = 0.0f;
 			need->lastValue.reset();
 		}
 	}
