@@ -1,0 +1,57 @@
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      # CommonLibSSE-NG version this plugin was written against.
+      COMMONLIB_COMMIT: dec1be18b1880c1f643afedc0d01db0118d648f9
+      VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg_cache,readwrite"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get CommonLibSSE-NG
+        shell: bash
+        run: |
+          git clone https://github.com/alandtse/CommonLibSSE-NG lib/commonlibsse-ng
+          cd lib/commonlibsse-ng
+          git checkout "$COMMONLIB_COMMIT"
+          git submodule update --init --recursive --depth 1
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg_cache
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: vcpkg-
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path vcpkg_cache | Out-Null
+          cmake -B build -S . -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package/SKSE/Plugins | Out-Null
+          Copy-Item data/SKSE/Plugins/SurvivalAdrenaline.ini package/SKSE/Plugins/
+          Copy-Item build/Release/SurvivalAdrenaline.dll package/SKSE/Plugins/
+          if (Test-Path build/Release/SurvivalAdrenaline.pdb) { Copy-Item build/Release/SurvivalAdrenaline.pdb package/SKSE/Plugins/ }
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: SurvivalAdrenaline
+          path: package/
