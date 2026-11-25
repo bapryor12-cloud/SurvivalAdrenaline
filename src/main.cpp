@@ -49,10 +49,10 @@ namespace
 
 	struct Settings
 	{
-		float hungerInDungeon = 0.5f;
-		float fatigueInDungeon = 0.5f;
-		float hungerInCombat = 0.5f;
-		float fatigueInCombat = 0.5f;
+		float hungerInDungeon = 0.15f;
+		float fatigueInDungeon = 0.15f;
+		float hungerInCombat = 0.15f;
+		float fatigueInCombat = 0.15f;
 		float checkInterval = 1.0f;
 		bool  crashMessage = true;
 	};

@@ -2,7 +2,7 @@
 
 An SKSE plugin for Skyrim SE/AE Survival Mode. Adrenaline keeps you going in dungeons and fights, and then you crash.
 
-- **In a dungeon or in combat,** hunger and fatigue build up at half speed by default.
+- **In a dungeon or in combat,** hunger and fatigue build up at 15% of their normal speed by default.
 - **The rest is held back, not forgiven.** When you're out of combat and out of any dungeon, everything you didn't gain lands at once. You get the message *"The adrenaline fades. Your hunger and weariness catch up with you."* along with Survival Mode's usual hunger and fatigue stage messages.
 - **Fighting inside a dungeon** uses the stronger of the two slowdowns. The crash waits until you've left the dungeon too.
 - **Dungeons** are interiors whose location is marked as a dungeon or clearable, or as a crypt, Dwemer ruin, Falmer hive, vampire or warlock lair, hagraven nest, dragon priest lair, bandit camp, Forsworn camp or animal den.
